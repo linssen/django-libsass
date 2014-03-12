@@ -1,53 +1,30 @@
-from django.contrib.staticfiles.finders import get_finders
-
 import sass
+
+from django.contrib.staticfiles.finders import get_finders
 from compressor.filters.base import FilterBase
 
-def get_include_paths():
-    """
-    Generate a list of include paths that libsass should use to find files
-    mentioned in @import lines.
-    """
-    include_paths = []
-
-    # Look for staticfile finders that define 'storages'
-    for finder in get_finders():
-        try:
-            storages = finder.storages
-        except AttributeError:
-            continue
-
-        for storage in storages.values():
-            try:
-                include_paths.append(storage.path('.'))
-            except NotImplementedError:
-                # storages that do not implement 'path' do not store files locally,
-                # and thus cannot provide an include path
-                pass
-
-    return include_paths
-
-
-INCLUDE_PATHS = None  # populate this on first call to 'compile'
-
-def compile(**kwargs):
-    """Perform sass.compile, but with the appropriate include_paths for Django added"""
-    global INCLUDE_PATHS
-    if INCLUDE_PATHS is None:
-        INCLUDE_PATHS = get_include_paths()
-
-    kwargs = kwargs.copy()
-    kwargs['include_paths'] = (kwargs.get('include_paths') or []) + INCLUDE_PATHS
-    return sass.compile(**kwargs)
-
-
 class SassCompiler(FilterBase):
+    """A SASS compiler that uses the python libsass binding."""
     def __init__(self, content, attrs=None, filter_type=None, charset=None, filename=None):
-        # FilterBase doesn't handle being passed attrs, so fiddle the signature
         super(SassCompiler, self).__init__(content, filter_type, filename)
 
+    def get_include_paths(self):
+        """SASSlib will need include paths as a param to know where to find
+        files and imported sheets."""
+        include_paths = []
+        # Use Django to build the paths from the get_finders generator
+        for storages in [f.storages for f in get_finders() if hasattr(f, 'storages')]:
+            include_paths += [s.path('.') for s in storages.itervalues() if hasattr(s, 'path')]
+
+        return include_paths
+
     def input(self, **kwargs):
+        kwargs['include_paths'] = kwargs.get('include_paths', [])
+        kwargs['include_paths'] += self.get_include_paths()
+
         if self.filename:
-            return compile(filename=self.filename)
+            kwargs['filename'] = self.filename
         else:
-            return compile(string=self.content)
+            kwargs['string'] = self.content
+
+        return sass.compile(**kwargs)
